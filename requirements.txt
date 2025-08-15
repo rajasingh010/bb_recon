@@ -1,0 +1,11 @@
+# Python dependencies for bb_recon
+# These are standard libraries in Python 3, but listed for clarity
+argparse>=1.1
+# For JSON output
+json>=2.0.9
+# For CSV output
+csv>=1.0
+# For threading
+concurrent.futures>=3.0
+# For logging
+logging>=0.5.1.2
