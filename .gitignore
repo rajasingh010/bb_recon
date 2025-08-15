@@ -1,0 +1,6 @@
+# .gitignore
+logs/*
+outputs/*
+temp_*.txt
+__pycache__/
+*.pyc
