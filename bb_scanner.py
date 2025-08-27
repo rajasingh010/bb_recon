@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 Bug Bounty Recon Tool - OWASP Top 10 Scanner
-Scans websites for common vulnerabilities and security issues
+Optimized for Kali Linux with enhanced reconnaissance capabilities
 """
 
 import requests
 import time
 import re
+import subprocess
+import socket
 from urllib.parse import urljoin, urlparse, parse_qs
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -18,19 +20,22 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from colorama import init, Fore, Style
 import json
+import nmap
 
 init(autoreset=True)
 
 class BugBountyScanner:
     def __init__(self, target_url):
         self.target_url = target_url
+        self.target_domain = urlparse(target_url).netloc
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
         })
         self.vulnerabilities = []
         self.forms = []
         self.inputs = []
+        self.nm = nmap.PortScanner()
         
     def setup_driver(self):
         """Setup Chrome driver for dynamic content analysis"""
@@ -39,6 +44,7 @@ class BugBountyScanner:
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
             service = Service(ChromeDriverManager().install())
             return webdriver.Chrome(service=service, options=chrome_options)
         except Exception as e:
@@ -47,12 +53,11 @@ class BugBountyScanner:
     
     def scan_website(self):
         """Main scanning function"""
-        print(f"{Fore.CYAN}[*] Starting scan for: {self.target_url}")
+        print(f"{Fore.CYAN}[*] Starting comprehensive scan for: {self.target_url}")
         
-        # Basic reconnaissance
+        # Enhanced reconnaissance for Kali Linux
+        self.network_reconnaissance()
         self.gather_info()
-        
-        # Find forms and inputs
         self.find_forms_and_inputs()
         
         # OWASP Top 10 vulnerability checks
@@ -69,6 +74,46 @@ class BugBountyScanner:
         
         # Generate report
         self.generate_report()
+    
+    def network_reconnaissance(self):
+        """Enhanced network reconnaissance using Kali Linux tools"""
+        print(f"{Fore.YELLOW}[*] Performing network reconnaissance...")
+        
+        try:
+            # DNS enumeration
+            print(f"{Fore.CYAN}[*] DNS Enumeration...")
+            try:
+                ip = socket.gethostbyname(self.target_domain)
+                print(f"{Fore.GREEN}[+] Target IP: {ip}")
+                
+                # Reverse DNS lookup
+                try:
+                    hostname = socket.gethostbyaddr(ip)[0]
+                    print(f"{Fore.GREEN}[+] Reverse DNS: {hostname}")
+                except:
+                    pass
+                    
+            except socket.gaierror:
+                print(f"{Fore.RED}[!] Could not resolve domain")
+                return
+            
+            # Port scanning with nmap
+            print(f"{Fore.CYAN}[*] Port Scanning...")
+            try:
+                self.nm.scan(ip, arguments='-sS -sV -O --version-intensity 5')
+                for host in self.nm.all_hosts():
+                    print(f"{Fore.GREEN}[+] Host: {host}")
+                    for proto in self.nm[host].all_protocols():
+                        ports = self.nm[host][proto].keys()
+                        for port in sorted(ports):
+                            service = self.nm[host][proto][port]
+                            print(f"{Fore.GREEN}[+] Port {port}: {service['name']} {service['version']}")
+                            
+            except Exception as e:
+                print(f"{Fore.YELLOW}[*] Nmap scan failed: {e}")
+                
+        except Exception as e:
+            print(f"{Fore.RED}[!] Network reconnaissance failed: {e}")
     
     def gather_info(self):
         """Gather basic information about the target"""
@@ -101,7 +146,7 @@ class BugBountyScanner:
             tech.append(response.headers['X-Powered-By'])
         
         # Check HTML content for frameworks
-        soup = BeautifulSoup(response.text, 'html.parser')
+        soup = BeautifulSoup(response.text, 'lxml')
         
         # Check for React
         if soup.find('div', {'data-reactroot': True}):
@@ -115,6 +160,14 @@ class BugBountyScanner:
         if soup.find('script', src=re.compile(r'jquery')):
             tech.append('jQuery')
         
+        # Check for WordPress
+        if soup.find('meta', {'name': 'generator', 'content': re.compile(r'wordpress', re.I)}):
+            tech.append('WordPress')
+        
+        # Check for PHP
+        if 'X-Powered-By' in response.headers and 'PHP' in response.headers['X-Powered-By']:
+            tech.append('PHP')
+        
         return ', '.join(tech) if tech else 'Unknown'
     
     def find_forms_and_inputs(self):
@@ -123,7 +176,7 @@ class BugBountyScanner:
         
         try:
             response = self.session.get(self.target_url)
-            soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(response.text, 'lxml')
             
             # Find all forms
             forms = soup.find_all('form')
@@ -157,8 +210,11 @@ class BugBountyScanner:
         """Check for injection vulnerabilities (A03:2021)"""
         print(f"{Fore.YELLOW}[*] Checking for injection vulnerabilities...")
         
-        # SQL Injection test payloads
-        sql_payloads = ["'", "1' OR '1'='1", "1; DROP TABLE users--", "1' UNION SELECT NULL--"]
+        # Enhanced SQL Injection test payloads
+        sql_payloads = [
+            "'", "1' OR '1'='1", "1; DROP TABLE users--", "1' UNION SELECT NULL--",
+            "1' AND SLEEP(5)--", "1' AND (SELECT COUNT(*) FROM information_schema.tables)>0--"
+        ]
         
         for form in self.forms:
             if form['method'] == 'POST':
@@ -169,20 +225,35 @@ class BugBountyScanner:
                             if inp['type'] in ['text', 'textarea']:
                                 data[inp['name']] = payload
                         
-                        response = self.session.post(urljoin(self.target_url, form['action']), data=data)
-                        
-                        # Check for SQL error patterns
-                        sql_errors = ['sql syntax', 'mysql_fetch', 'oracle error', 'sqlite']
-                        if any(error in response.text.lower() for error in sql_errors):
-                            self.vulnerabilities.append({
-                                'type': 'SQL Injection',
-                                'severity': 'High',
-                                'description': f'Potential SQL injection in form {form["action"]}',
-                                'payload': payload,
-                                'url': urljoin(self.target_url, form['action'])
-                            })
-                            print(f"{Fore.RED}[!] Potential SQL Injection found!")
-                            break
+                        if data:
+                            start_time = time.time()
+                            response = self.session.post(urljoin(self.target_url, form['action']), data=data)
+                            response_time = time.time() - start_time
+                            
+                            # Check for SQL error patterns
+                            sql_errors = ['sql syntax', 'mysql_fetch', 'oracle error', 'sqlite', 'postgresql']
+                            if any(error in response.text.lower() for error in sql_errors):
+                                self.vulnerabilities.append({
+                                    'type': 'SQL Injection',
+                                    'severity': 'High',
+                                    'description': f'Potential SQL injection in form {form["action"]}',
+                                    'payload': payload,
+                                    'url': urljoin(self.target_url, form['action'])
+                                })
+                                print(f"{Fore.RED}[!] Potential SQL Injection found!")
+                                break
+                            
+                            # Check for time-based injection
+                            if response_time > 4 and 'sleep' in payload.lower():
+                                self.vulnerabilities.append({
+                                    'type': 'Time-Based SQL Injection',
+                                    'severity': 'High',
+                                    'description': f'Time-based SQL injection in form {form["action"]}',
+                                    'payload': payload,
+                                    'url': urljoin(self.target_url, form['action'])
+                                })
+                                print(f"{Fore.RED}[!] Time-based SQL Injection detected!")
+                                break
                             
                     except Exception as e:
                         continue
@@ -193,7 +264,7 @@ class BugBountyScanner:
         
         # Check for weak authentication mechanisms
         weak_auth_patterns = [
-            '/login', '/admin', '/user', '/account'
+            '/login', '/admin', '/user', '/account', '/administrator', '/manage'
         ]
         
         for pattern in weak_auth_patterns:
@@ -203,7 +274,7 @@ class BugBountyScanner:
                 
                 if response.status_code == 200:
                     # Check if it's a login form
-                    soup = BeautifulSoup(response.text, 'html.parser')
+                    soup = BeautifulSoup(response.text, 'lxml')
                     if soup.find('input', {'type': 'password'}):
                         print(f"{Fore.YELLOW}[*] Found login form at: {url}")
                         
@@ -225,10 +296,11 @@ class BugBountyScanner:
         """Check for sensitive data exposure (A02:2021)"""
         print(f"{Fore.YELLOW}[*] Checking for sensitive data exposure...")
         
-        # Check for common sensitive files
+        # Enhanced list of sensitive files
         sensitive_files = [
-            '/robots.txt', '/sitemap.xml', '/.env', '/config.php',
-            '/wp-config.php', '/.git/config', '/.htaccess'
+            '/robots.txt', '/sitemap.xml', '/.env', '/config.php', '/wp-config.php',
+            '/.git/config', '/.htaccess', '/web.config', '/.env.local', '/config.ini',
+            '/database.yml', '/application.properties', '/.dockerignore', '/docker-compose.yml'
         ]
         
         for file_path in sensitive_files:
@@ -241,8 +313,8 @@ class BugBountyScanner:
                     
                     # Check for sensitive information
                     sensitive_patterns = [
-                        r'password\s*=', r'api_key\s*=', r'secret\s*=',
-                        r'database\s*=', r'admin\s*=', r'root\s*='
+                        r'password\s*=', r'api_key\s*=', r'secret\s*=', r'database\s*=',
+                        r'admin\s*=', r'root\s*=', r'aws_access_key\s*=', r'private_key\s*='
                     ]
                     
                     for pattern in sensitive_patterns:
@@ -278,7 +350,7 @@ class BugBountyScanner:
         print(f"{Fore.YELLOW}[*] Checking access control vulnerabilities...")
         
         # Check for common admin paths
-        admin_paths = ['/admin', '/administrator', '/manage', '/control', '/dashboard']
+        admin_paths = ['/admin', '/administrator', '/manage', '/control', '/dashboard', '/panel']
         
         for path in admin_paths:
             try:
@@ -332,11 +404,13 @@ class BugBountyScanner:
         """Check for XSS vulnerabilities (A03:2021)"""
         print(f"{Fore.YELLOW}[*] Checking for XSS vulnerabilities...")
         
-        # Basic XSS payloads
+        # Enhanced XSS payloads
         xss_payloads = [
             '<script>alert("XSS")</script>',
             '"><script>alert("XSS")</script>',
-            'javascript:alert("XSS")'
+            'javascript:alert("XSS")',
+            '<img src=x onerror=alert("XSS")>',
+            '<svg onload=alert("XSS")>'
         ]
         
         for form in self.forms:
@@ -384,7 +458,9 @@ class BugBountyScanner:
             vulnerable_components = {
                 'jquery': r'jquery[.-](\d+\.\d+\.\d+)',
                 'bootstrap': r'bootstrap[.-](\d+\.\d+\.\d+)',
-                'wordpress': r'wp-content|wp-includes'
+                'wordpress': r'wp-content|wp-includes',
+                'drupal': r'drupal|drupal\.js',
+                'joomla': r'joomla|joomla\.js'
             }
             
             for component, pattern in vulnerable_components.items():
@@ -402,7 +478,7 @@ class BugBountyScanner:
         
         # This is difficult to test automatically
         # We'll check for common logging endpoints
-        logging_endpoints = ['/logs', '/admin/logs', '/debug', '/status']
+        logging_endpoints = ['/logs', '/admin/logs', '/debug', '/status', '/health']
         
         for endpoint in logging_endpoints:
             try:
@@ -438,6 +514,7 @@ class BugBountyScanner:
         # Save report to file
         report_data = {
             'target_url': self.target_url,
+            'target_domain': self.target_domain,
             'scan_time': time.strftime('%Y-%m-%d %H:%M:%S'),
             'total_vulnerabilities': len(self.vulnerabilities),
             'vulnerabilities': self.vulnerabilities,
@@ -453,6 +530,7 @@ class BugBountyScanner:
 
 def main():
     print(f"{Fore.CYAN}🐛 Bug Bounty Recon Tool - OWASP Top 10 Scanner")
+    print(f"{Fore.CYAN}   Optimized for Kali Linux")
     print(f"{Fore.CYAN}{'='*50}")
     
     target_url = input(f"{Fore.YELLOW}Enter target URL: ").strip()
