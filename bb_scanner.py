@@ -146,7 +146,7 @@ class BugBountyScanner:
             tech.append(response.headers['X-Powered-By'])
         
         # Check HTML content for frameworks
-        soup = BeautifulSoup(response.text, 'lxml')
+        soup = BeautifulSoup(response.text, 'html.parser')
         
         # Check for React
         if soup.find('div', {'data-reactroot': True}):
@@ -176,7 +176,7 @@ class BugBountyScanner:
         
         try:
             response = self.session.get(self.target_url)
-            soup = BeautifulSoup(response.text, 'lxml')
+            soup = BeautifulSoup(response.text, 'html.parser')
             
             # Find all forms
             forms = soup.find_all('form')
@@ -274,7 +274,7 @@ class BugBountyScanner:
                 
                 if response.status_code == 200:
                     # Check if it's a login form
-                    soup = BeautifulSoup(response.text, 'lxml')
+                    soup = BeautifulSoup(response.text, 'html.parser')
                     if soup.find('input', {'type': 'password'}):
                         print(f"{Fore.YELLOW}[*] Found login form at: {url}")
                         
