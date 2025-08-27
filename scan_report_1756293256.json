@@ -1,0 +1,9 @@
+{
+  "target_url": "https://test.vulnweb.com",
+  "target_domain": "test.vulnweb.com",
+  "scan_time": "2025-08-27 16:44:16",
+  "total_vulnerabilities": 0,
+  "vulnerabilities": [],
+  "forms_found": 0,
+  "inputs_found": 0
+}

